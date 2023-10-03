@@ -38,6 +38,51 @@ class msgInterop:
         self.parent_results = None
 
 
+def getJsonProperty(payload, propName, defValue=None):
+    """
+    Return the value of propName in payload, enabled Json ptr for propName and accept tuple payload
+    """
+    if not isinstance(propName, str) or propName is '':
+        return defValue
+
+    my_logger.info('getJsonProperty - get property {} from {}'.format(propName, payload))
+    if propName[0] == '/':
+        propNames = propName.split('/')[1:]
+    else:
+        propNames = [propName]
+
+    if isinstance(payload, dict):
+        retProp = payload
+    elif isinstance(payload, tuple):
+        while isinstance(payload, tuple):
+            _a, _b = payload
+            if isinstance(_a, dict):
+                retProp = _a
+                break
+            elif isinstance(_b, dict):
+                retProp = _b
+                break
+            elif isinstance(_a, tuple):
+                payload = _a
+            elif isinstance(_b, tuple):
+                payload = _b
+            else:
+                return defValue
+    else:
+        return defValue
+
+    isError = False
+    while len(propNames) > 0 and not isError:
+        if isinstance(retProp, dict) and propNames[0] in retProp:
+            retProp = retProp[propNames[0]]
+            propNames = propNames[1:]
+        else:
+            retProp = defValue
+            isError = True
+
+    return retProp
+
+
 def validateComparisonAnyOfAllOf(profile_entry, property_path="Unspecified"):
     """
     Gather comparison information after processing all Resources on system
@@ -365,10 +410,6 @@ def checkConditionalRequirement(propResourceObj, profile_entry, rf_payload_tuple
         # find property in json payload by working backwards thru objects
         # rf_payload tuple is designed just for this piece, since there is
         # no parent in dictionaries
-        if profile_entry["CompareProperty"][0] == '/':
-            comparePropNames = profile_entry["CompareProperty"].split('/')[1:]
-        else:
-            comparePropNames = [profile_entry["CompareProperty"]]
         if "CompareType" not in profile_entry:
             my_logger.error("Invalid Profile - CompareType is required for CompareProperty but not found")
             raise ValueError('CompareType missing with CompareProperty')
@@ -378,22 +419,8 @@ def checkConditionalRequirement(propResourceObj, profile_entry, rf_payload_tuple
         if "CompareValues" in profile_entry and profile_entry['CompareType'] in ['Absent', 'Present']:
             my_logger.warning("Invalid Profile - CompareValues is not required for CompareProperty Absent or Present ")
 
-        rf_payload_item, rf_payload = rf_payload_tuple
-        while rf_payload is not None and (not isinstance(rf_payload_item, dict) or comparePropNames[0] not in rf_payload_item):
-            rf_payload_item, rf_payload = rf_payload
-
-        if rf_payload_item is None:
-            my_logger.error('Could not acquire expected CompareProperty {}'.format(comparePropNames[0]))
-            return False
-
-        compareProp = rf_payload_item.get(comparePropNames[0], REDFISH_ABSENT)
-        if (compareProp != REDFISH_ABSENT) and len(comparePropNames) > 1:
-            for comparePropName in comparePropNames[1:]:
-                compareProp = compareProp.get(comparePropName, REDFISH_ABSENT)
-                if compareProp == REDFISH_ABSENT:
-                    break
-        # compatability with old version, deprecate with versioning
-        compareType = profile_entry.get("CompareType", profile_entry.get("Comparison"))
+        compareProp = getJsonProperty(rf_payload_tuple, profile_entry.get("CompareProperty"), REDFISH_ABSENT)
+        compareType = profile_entry.get("CompareType", profile_entry.get("CompareProperty"))
         return checkComparison(compareProp, compareType, profile_entry.get("CompareValues", []))[1]
     else:
         my_logger.error("Invalid Profile - No conditional given")
@@ -694,7 +721,7 @@ def validateInteropResource(propResourceObj, interop_profile, rf_payload):
             if 'UseCaseKeyProperty' in use_case:
                 entry_key, entry_comparison, entry_values = use_case['UseCaseKeyProperty'], use_case['UseCaseComparison'], use_case['UseCaseKeyValues']
 
-                _, use_case_applies = checkComparison(rf_payload.get(entry_key), entry_comparison, entry_values)
+                _, use_case_applies = checkComparison(getJsonProperty(rf_payload, entry_key, REDFISH_ABSENT), entry_comparison, entry_values)
 
                 # Check if URI applies to this usecase as well
                 if 'URIs' in use_case:
